@@ -1,0 +1,11 @@
+[workspace]
+members = [
+    "programs/basket-token"
+]
+
+[workspace.dependencies]
+anchor-lang = "0.28.0"
+anchor-spl = "0.28.0"
+
+[profile.release]
+overflow-checks = true

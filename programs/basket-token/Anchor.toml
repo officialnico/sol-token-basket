@@ -1,0 +1,16 @@
+[features]
+seeds = false
+skip-lint = false
+
+[programs.localnet]
+basket_token = "HEtbYTnFvGD6FePjzrGCyjZwtDR6ycRd26qPcPbNQoCN"
+
+[programs.devnet]
+basket_token = "HEtbYTnFvGD6FePjzrGCyjZwtDR6ycRd26qPcPbNQoCN"
+
+[programs.mainnet]
+basket_token = "HEtbYTnFvGD6FePjzrGCyjZwtDR6ycRd26qPcPbNQoCN"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"

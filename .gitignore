@@ -1,0 +1,28 @@
+.anchor
+.DS_Store
+target
+**/*.rs.bk
+node_modules
+test-ledger
+.yarn
+# Environment variables
+.env
+
+# Build output and dependencies
+/target/
+/node_modules/
+/dist/
+.anchor/
+
+# Key files / Private keys
+id.json
+
+# Lock files (debatable, but generally for Rust projects you want to keep Cargo.lock)
+yarn.lock
+# Don't ignore Cargo.lock for libraries according to Rust convention
+
+# Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
