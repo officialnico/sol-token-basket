@@ -5,9 +5,9 @@
 sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
 
 # Install Anchor CLI
-  cargo install --git https://github.com/coral-xyz/anchor avm --locked
-  avm install latest
-  avm use latest
+cargo install --git https://github.com/coral-xyz/anchor avm --locked
+avm install latest
+avm use latest
 ```
 
 - make sure solana is in your path
