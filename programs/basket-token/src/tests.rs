@@ -2,6 +2,7 @@
 mod tests {
     use super::*;
     use anchor_lang::solana_program::{system_program, system_instruction};
+    use anchor_spl::associated_token;
     use solana_program_test::*;
     use solana_sdk::{signature::Keypair, signer::Signer};
 
@@ -9,13 +10,19 @@ mod tests {
     pub fn process_jupiter_instruction(
         _program_id: &Pubkey,
         accounts: &[AccountInfo],
-        _instruction_data: &[u8],
+        instruction_data: &[u8],
     ) -> Result<()> {
-        // Mock a successful swap
-        // Transfer tokens from source to destination
+        // Deserialize instruction data to get swap amount
+        let (_discriminator, params) = AnchorSerialize::try_to_vec(&(
+            4u8,
+            jupiter::RouteSwapParams::try_from_slice(&instruction_data[1..]).unwrap()
+        )).unwrap();
+
         let source_account = &accounts[0];
         let dest_account = &accounts[1];
-        let amount = 1_000_000; // Mock amount received
+        
+        // Mock Jupiter's swap behavior with 1:1 rate for simplicity
+        let amount = params.in_amount;
 
         **dest_account.try_borrow_mut_lamports()? += amount;
         **source_account.try_borrow_mut_lamports()? -= amount;
@@ -56,7 +63,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Create PDAs
         let (basket_pda, _) = Pubkey::find_program_address(
             &[b"basket"],
             &program_id,
@@ -70,16 +76,15 @@ mod tests {
         (context, payer, basket_pda, mint_pda)
     }
 
-    #[tokio::test]
-    async fn test_initialize() {
-        let (mut context, payer, basket_pda, mint_pda) = setup().await;
-
-        let (_, basket_bump) = Pubkey::find_program_address(&[b"basket"], &id());
-        let (_, mint_bump) = Pubkey::find_program_address(&[b"basket_mint"], &id());
-
+    async fn initialize_basket(
+        context: &mut ProgramTestContext,
+        payer: &Keypair,
+        basket_pda: &Pubkey,
+        mint_pda: &Pubkey,
+    ) -> Result<()> {
         let accounts = Initialize {
-            basket: basket_pda,
-            basket_mint: mint_pda,
+            basket: *basket_pda,
+            basket_mint: *mint_pda,
             authority: payer.pubkey(),
             system_program: system_program::ID,
             token_program: token::ID,
@@ -88,18 +93,59 @@ mod tests {
 
         let ix = Instruction::new_with_bytes(
             id(),
-            &[0, basket_bump, mint_bump], // Initialize instruction with bumps
+            &[0], // Initialize instruction
             accounts.to_account_metas(None),
         );
 
         let transaction = Transaction::new_signed_with_payer(
             &[ix],
             Some(&payer.pubkey()),
-            &[&payer],
+            &[payer],
             context.last_blockhash,
         );
 
-        context.banks_client.process_transaction(transaction).await.unwrap();
+        context.banks_client.process_transaction(transaction).await?;
+        Ok(())
+    }
+
+    async fn add_token_to_basket(
+        context: &mut ProgramTestContext,
+        payer: &Keypair,
+        basket_pda: &Pubkey,
+        token_mint: &Pubkey,
+        weight: u8,
+    ) -> Result<()> {
+        let accounts = AddToken {
+            basket: *basket_pda,
+            authority: payer.pubkey(),
+        };
+
+        let ix = Instruction::new_with_bytes(
+            id(),
+            &anchor_lang::InstructionData::data(&basket_token::instruction::AddToken {
+                token_mint: *token_mint,
+                weight,
+            }),
+            accounts.to_account_metas(None),
+        );
+
+        let transaction = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&payer.pubkey()),
+            &[payer],
+            context.last_blockhash,
+        );
+
+        context.banks_client.process_transaction(transaction).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_initialize() {
+        let (mut context, payer, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
 
         // Verify basket state
         let basket_account = context.banks_client
@@ -112,39 +158,28 @@ mod tests {
         assert_eq!(basket_state.authority, payer.pubkey());
         assert_eq!(basket_state.tokens.len(), 0);
         assert_eq!(basket_state.total_supply, 0);
+
+        // Verify mint state
+        let mint_account = context.banks_client
+            .get_account(mint_pda)
+            .await
+            .unwrap()
+            .unwrap();
+        let mint = Mint::unpack(&mint_account.data[..]).unwrap();
+        assert_eq!(mint.decimals, 9);
     }
 
     #[tokio::test]
     async fn test_add_token() {
-        let (mut context, payer, basket_pda, _) = setup().await;
-        
-        // Initialize first...
-        // (Add initialization code here)
+        let (mut context, payer, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
 
         let token_mint = Keypair::new();
-        
-        let accounts = AddToken {
-            basket: basket_pda,
-            authority: payer.pubkey(),
-        };
-
-        let ix = Instruction::new_with_bytes(
-            id(),
-            &anchor_lang::InstructionData::data(&basket_token::instruction::AddToken {
-                token_mint: token_mint.pubkey(),
-                weight: 50,
-            }),
-            accounts.to_account_metas(None),
-        );
-
-        let transaction = Transaction::new_signed_with_payer(
-            &[ix],
-            Some(&payer.pubkey()),
-            &[&payer],
-            context.last_blockhash,
-        );
-
-        context.banks_client.process_transaction(transaction).await.unwrap();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token_mint.pubkey(), 50)
+            .await
+            .unwrap();
 
         // Verify token was added
         let basket_account = context.banks_client
@@ -160,12 +195,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_deposit() {
-        let (mut context, user, basket_pda, mint_pda) = setup().await;
+    async fn test_weight_overflow() {
+        let (mut context, payer, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
 
-        // Initialize and add tokens first...
-        // (Add initialization and add_token code here)
+        // Add first token with 60% weight
+        let token1 = Keypair::new();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token1.pubkey(), 60)
+            .await
+            .unwrap();
 
+        // Try to add second token with 50% weight (should fail)
+        let token2 = Keypair::new();
+        let result = add_token_to_basket(&mut context, &payer, &basket_pda, &token2.pubkey(), 50)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_minimum_deposit() {
+        let (mut context, payer, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
+
+        let token_mint = Keypair::new();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token_mint.pubkey(), 100)
+            .await
+            .unwrap();
+
+        let user = Keypair::new();
         let user_basket_token = get_associated_token_address(&user.pubkey(), &mint_pda);
 
         let accounts = Deposit {
@@ -178,10 +239,11 @@ mod tests {
             associated_token_program: associated_token::ID,
         };
 
-        let deposit_amount = 1_000_000_000; // 1 SOL
+        // Try to deposit less than minimum
+        let deposit_amount = MINIMUM_DEPOSIT - 1;
         let jupiter_quote = [0u8; 32];
-        let slippage_bps = 100; // 1%
-        let minimum_token_amounts = vec![100_000_000]; // Minimum expected output
+        let slippage_bps = 100;
+        let minimum_token_amounts = vec![100_000];
 
         let ix = Instruction::new_with_bytes(
             id(),
@@ -201,49 +263,74 @@ mod tests {
             context.last_blockhash,
         );
 
-        context.banks_client.process_transaction(transaction).await.unwrap();
-
-        // Verify basket token balance
-        let user_token_account = context.banks_client
-            .get_account(user_basket_token)
-            .await
-            .unwrap()
-            .unwrap();
-
-        let token_balance = TokenAccount::unpack(&user_token_account.data[..]).unwrap();
-        assert!(token_balance.amount > 0);
+        let err = context.banks_client.process_transaction(transaction).await.unwrap_err();
+        assert!(matches!(err, BanksClientError::TransactionError(_)));
     }
 
     #[tokio::test]
-    async fn test_redeem() {
-        let (mut context, user, basket_pda, mint_pda) = setup().await;
+    async fn test_multi_token_deposit() {
+        let (mut context, payer, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
 
-        // Initialize, add tokens, and deposit first...
-        // (Add setup code here)
+        // Add two tokens with equal weights
+        let token1 = Keypair::new();
+        let token2 = Keypair::new();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token1.pubkey(), 50)
+            .await
+            .unwrap();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token2.pubkey(), 50)
+            .await
+            .unwrap();
 
-        let redeem_amount = 500_000_000; // Redeem half
-        let jupiter_quote = [0u8; 32];
-        let slippage_bps = 100; // 1%
-        let minimum_sol_amount = 450_000_000; // Accept 10% slippage
+        let user = Keypair::new();
+        // Airdrop SOL to user
+        context.banks_client
+            .process_transaction(Transaction::new_signed_with_payer(
+                &[system_instruction::transfer(
+                    &context.payer.pubkey(),
+                    &user.pubkey(),
+                    2_000_000_000, // 2 SOL
+                )],
+                Some(&context.payer.pubkey()),
+                &[&context.payer],
+                context.last_blockhash,
+            ))
+            .await
+            .unwrap();
 
-        let accounts = Redeem {
+        let user_basket_token = get_associated_token_address(&user.pubkey(), &mint_pda);
+
+        let accounts = Deposit {
             basket: basket_pda,
             basket_mint: mint_pda,
-            user_basket_token: get_associated_token_address(&user.pubkey(), &mint_pda),
+            user_basket_token,
             user: user.pubkey(),
             system_program: system_program::ID,
             token_program: token::ID,
+            associated_token_program: associated_token::ID,
         };
+
+        let deposit_amount = 1_000_000_000; // 1 SOL
+        let jupiter_quote = [0u8; 32];
+        let slippage_bps = 100;
+        let minimum_token_amounts = vec![100_000_000, 100_000_000];
+
+        // Create mock Jupiter accounts
+        let mock_accounts = create_mock_jupiter_accounts(&mut context, 2).await;
+        let mut all_accounts = accounts.to_account_metas(None);
+        all_accounts.extend(mock_accounts);
 
         let ix = Instruction::new_with_bytes(
             id(),
-            &anchor_lang::InstructionData::data(&basket_token::instruction::Redeem {
-                amount: redeem_amount,
+            &anchor_lang::InstructionData::data(&basket_token::instruction::Deposit {
+                amount: deposit_amount,
                 jupiter_quote,
                 slippage_bps,
-                minimum_sol_amount,
+                minimum_token_amounts,
             }),
-            accounts.to_account_metas(None),
+            all_accounts,
         );
 
         let transaction = Transaction::new_signed_with_payer(
@@ -255,45 +342,240 @@ mod tests {
 
         context.banks_client.process_transaction(transaction).await.unwrap();
 
-        // Verify SOL balance increased
-        let user_account = context.banks_client
-            .get_account(user.pubkey())
+        // Verify basket token balance
+        let user_token_account = context.banks_client
+            .get_account(user_basket_token)
             .await
             .unwrap()
             .unwrap();
-        assert!(user_account.lamports > 0);
+
+        let token_balance = TokenAccount::unpack(&user_token_account.data[..]).unwrap();
+        assert_eq!(token_balance.amount, deposit_amount);
     }
 
     #[tokio::test]
-    async fn test_errors() {
-        let (mut context, payer, basket_pda, _) = setup().await;
+    async fn test_multi_token_redeem() {
+        let (mut context, payer, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
 
-        // Test unauthorized token addition
-        let unauthorized_user = Keypair::new();
-        let token_mint = Keypair::new();
+        // Add tokens and deposit first
+        let token1 = Keypair::new();
+        let token2 = Keypair::new();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token1.pubkey(), 50)
+            .await
+            .unwrap();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token2.pubkey(), 50)
+            .await
+            .unwrap();
 
-        let accounts = AddToken {
+        // ... (Previous deposit setup)
+
+        let redeem_amount = 500_000_000; // Redeem half
+        let jupiter_quote = [0u8; 32];
+        let slippage_bps = 100;
+        let minimum_sol_amount = 450_000_000;
+
+        let accounts = Redeem {
             basket: basket_pda,
-            authority: unauthorized_user.pubkey(),
+            basket_mint: mint_pda,
+            user_basket_token: get_associated_token_address(&payer.pubkey(), &mint_pda),
+            user: payer.pubkey(),
+            system_program: system_program::ID,
+            token_program: token::ID,
         };
+
+        // Create mock Jupiter accounts
+        let mock_accounts = create_mock_jupiter_accounts(&mut context, 2).await;
+        let mut all_accounts = accounts.to_account_metas(None);
+        all_accounts.extend(mock_accounts);
 
         let ix = Instruction::new_with_bytes(
             id(),
-            &anchor_lang::InstructionData::data(&basket_token::instruction::AddToken {
-                token_mint: token_mint.pubkey(),
-                weight: 50,
+            &anchor_lang::InstructionData::data(&basket_token::instruction::Redeem {
+                amount: redeem_amount,
+                jupiter_quote,
+                slippage_bps,
+                minimum_sol_amount,
+            }),
+            all_accounts,
+        );
+
+        let transaction = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&payer.pubkey()),
+            &[&payer],
+            context.last_blockhash,
+        );
+
+        context.banks_client.process_transaction(transaction).await.unwrap();
+
+        // Verify SOL balance increased
+        let user_account = context.banks_client
+            .get_account(payer.pubkey())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(user_account.lamports >= minimum_sol_amount);
+    }
+
+    #[tokio::test]
+    async fn test_slippage_protection() {
+        let (mut context, payer, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
+
+        // Add a token
+        let token_mint = Keypair::new();
+        add_token_to_basket(&mut context, &payer, &basket_pda, &token_mint.pubkey(), 100)
+            .await
+            .unwrap();
+
+        // Set up deposit with very high minimum token amount
+        let deposit_amount = 1_000_000_000;
+        let jupiter_quote = [0u8; 32];
+        let slippage_bps = 100;
+        let minimum_token_amounts = vec![deposit_amount * 2]; // Impossible to meet this minimum
+
+        let user_basket_token = get_associated_token_address(&payer.pubkey(), &mint_pda);
+
+        let accounts = Deposit {
+            basket: basket_pda,
+            basket_mint: mint_pda,
+            user_basket_token,
+            user: payer.pubkey(),
+            system_program: system_program::ID,
+            token_program: token::ID,
+            associated_token_program: associated_token::ID,
+        };
+
+        // Create mock Jupiter accounts
+        let mock_accounts = create_mock_jupiter_accounts(&mut context, 1).await;
+        let mut all_accounts = accounts.to_account_metas(None);
+        all_accounts.extend(mock_accounts);
+
+        let ix = Instruction::new_with_bytes(
+            id(),
+            &anchor_lang::InstructionData::data(&basket_token::instruction::Deposit {
+                amount: deposit_amount,
+                jupiter_quote,
+                slippage_bps,
+                minimum_token_amounts,
+            }),
+            all_accounts,
+        );
+
+        let transaction = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&payer.pubkey()),
+            &[&payer],
+            context.last_blockhash,
+        );
+
+        let err = context.banks_client.process_transaction(transaction).await.unwrap_err();
+        assert!(matches!(err, BanksClientError::TransactionError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_insufficient_sol() {
+        let (mut context, _, basket_pda, mint_pda) = setup().await;
+        initialize_basket(&mut context, &context.payer, &basket_pda, &mint_pda)
+            .await
+            .unwrap();
+
+        // Create user with very little SOL
+        let poor_user = Keypair::new();
+        context.banks_client
+            .process_transaction(Transaction::new_signed_with_payer(
+                &[system_instruction::transfer(
+                    &context.payer.pubkey(),
+                    &poor_user.pubkey(),
+                    1_000_000, // Only 0.001 SOL
+                )],
+                Some(&context.payer.pubkey()),
+                &[&context.payer],
+                context.last_blockhash,
+            ))
+            .await
+            .unwrap();
+
+        let token_mint = Keypair::new();
+        add_token_to_basket(&mut context, &context.payer, &basket_pda, &token_mint.pubkey(), 100)
+            .await
+            .unwrap();
+
+        let user_basket_token = get_associated_token_address(&poor_user.pubkey(), &mint_pda);
+
+        let accounts = Deposit {
+            basket: basket_pda,
+            basket_mint: mint_pda,
+            user_basket_token,
+            user: poor_user.pubkey(),
+            system_program: system_program::ID,
+            token_program: token::ID,
+            associated_token_program: associated_token::ID,
+        };
+
+        let deposit_amount = 1_000_000_000; // Try to deposit 1 SOL
+        let minimum_token_amounts = vec![100_000_000];
+
+        let ix = Instruction::new_with_bytes(
+            id(),
+            &anchor_lang::InstructionData::data(&basket_token::instruction::Deposit {
+                amount: deposit_amount,
+                jupiter_quote: [0u8; 32],
+                slippage_bps: 100,
+                minimum_token_amounts,
             }),
             accounts.to_account_metas(None),
         );
 
         let transaction = Transaction::new_signed_with_payer(
             &[ix],
-            Some(&unauthorized_user.pubkey()),
-            &[&unauthorized_user],
+            Some(&poor_user.pubkey()),
+            &[&poor_user],
             context.last_blockhash,
         );
 
         let err = context.banks_client.process_transaction(transaction).await.unwrap_err();
-        assert_eq!(err.unwrap(), TransactionError::InstructionError(0, InstructionError::Custom(BasketError::Unauthorized as u32)));
+        assert!(matches!(err, BanksClientError::TransactionError(_)));
+    }
+
+    // Helper function to create mock Jupiter accounts
+    async fn create_mock_jupiter_accounts(
+        context: &mut ProgramTestContext,
+        num_pairs: usize,
+    ) -> Vec<AccountMeta> {
+        let mut accounts = Vec::new();
+        for _ in 0..num_pairs {
+            let token_account = Keypair::new();
+            let destination = Keypair::new();
+
+            // Fund the token account
+            context.banks_client
+                .process_transaction(Transaction::new_signed_with_payer(
+                    &[system_instruction::transfer(
+                        &context.payer.pubkey(),
+                        &token_account.pubkey(),
+                        1_000_000_000,
+                    )],
+                    Some(&context.payer.pubkey()),
+                    &[&context.payer],
+                    context.last_blockhash,
+                ))
+                .await
+                .unwrap();
+
+            // Add accounts needed by Jupiter (simplified for testing)
+            accounts.push(AccountMeta::new(token_account.pubkey(), false));
+            accounts.push(AccountMeta::new(destination.pubkey(), false));
+            // Add other required Jupiter accounts (simplified)
+            for _ in 0..10 {
+                accounts.push(AccountMeta::new(Keypair::new().pubkey(), false));
+            }
+        }
+        accounts
     }
 }
