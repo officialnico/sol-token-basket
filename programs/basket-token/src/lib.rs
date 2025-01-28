@@ -1,9 +1,9 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Mint};
 use anchor_spl::associated_token::AssociatedToken;
-use solana_program::instruction::{Instruction, AccountMeta};
+use anchor_spl::token::{self, Mint, Token, TokenAccount};
+use solana_program::instruction::{AccountMeta, Instruction};
 
-declare_id!("HEtbYTnFvGD6FePjzrGCyjZwtDR6ycRd26qPcPbNQoCN");
+declare_id!("E5T9eLjbfeWRCegwocsrWfn1CkH4a5MnySjheUuwfNMt");
 
 #[account]
 #[derive(Default)]
@@ -29,29 +29,30 @@ impl BasketState {
     pub const REENTRANCY_GUARD_SIZE: usize = 1;
 
     pub fn required_space(max_tokens: usize) -> usize {
-        Self::DISCRIMINATOR_SIZE +
-        Self::AUTHORITY_SIZE +
-        Self::VEC_PREFIX_SIZE +
-        (Self::TOKEN_ENTRY_SIZE * max_tokens) +
-        Self::TOTAL_SUPPLY_SIZE +
-        Self::BUMP_SIZE +
-        Self::MAX_TOKENS_SIZE +
-        Self::PAUSED_SIZE +
-        Self::REENTRANCY_GUARD_SIZE
+        Self::DISCRIMINATOR_SIZE
+            + Self::AUTHORITY_SIZE
+            + Self::VEC_PREFIX_SIZE
+            + (Self::TOKEN_ENTRY_SIZE * max_tokens)
+            + Self::TOTAL_SUPPLY_SIZE
+            + Self::BUMP_SIZE
+            + Self::MAX_TOKENS_SIZE
+            + Self::PAUSED_SIZE
+            + Self::REENTRANCY_GUARD_SIZE
     }
 }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
 pub struct TokenInfo {
     pub mint: Pubkey,
-    pub weight: u8,  // Percentage weight in basket
+    pub weight: u8,            // Percentage weight in basket
     pub token_account: Pubkey, // Associated token account owned by basket
 }
 pub mod jupiter {
     use anchor_lang::prelude::*;
-    
-    pub static JUPITER_V6_ID: Pubkey = solana_program::pubkey!("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
-    
+
+    pub static JUPITER_V6_ID: Pubkey =
+        solana_program::pubkey!("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4");
+
     #[derive(AnchorSerialize, AnchorDeserialize)]
     pub struct RouteSwapParams {
         pub in_amount: u64,
@@ -59,7 +60,6 @@ pub mod jupiter {
         pub slippage_bps: u16,
     }
 }
-
 
 pub struct ReentrancyGuard<'info> {
     guard_account: &'info mut Account<'info, BasketState>,
@@ -71,10 +71,7 @@ impl<'info> Drop for ReentrancyGuard<'info> {
     }
 }
 
-pub fn with_reentrancy_guard<'a, T, F>(
-    account: &'a mut Account<'a, BasketState>,
-    f: F,
-) -> Result<T>
+pub fn with_reentrancy_guard<'a, T, F>(account: &'a mut Account<'a, BasketState>, f: F) -> Result<T>
 where
     F: FnOnce() -> Result<T>,
 {
@@ -82,7 +79,9 @@ where
         return err!(BasketError::ReentrancyDetected);
     }
     account.reentrancy_guard = true;
-    let _guard = ReentrancyGuard { guard_account: account };
+    let _guard = ReentrancyGuard {
+        guard_account: account,
+    };
     let result = f();
     result
 }
@@ -95,10 +94,7 @@ pub mod basket_token {
     pub const MINIMUM_DEPOSIT: u64 = 10_000_000;
     pub const MAX_TOKENS: usize = 10;
 
-    pub fn initialize(
-        ctx: Context<Initialize>,
-        max_tokens: u8,
-    ) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>, max_tokens: u8) -> Result<()> {
         require!(
             max_tokens as usize <= MAX_TOKENS,
             BasketError::TooManyTokens
@@ -126,7 +122,7 @@ pub struct Initialize<'info> {
         bump
     )]
     pub basket: Account<'info, BasketState>,
-    
+
     #[account(
         init,
         payer = authority,
@@ -136,7 +132,7 @@ pub struct Initialize<'info> {
         bump
     )]
     pub basket_mint: Account<'info, Mint>,
-    
+
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -169,10 +165,10 @@ pub struct SetPaused<'info> {
 pub struct Deposit<'info> {
     #[account(mut)]
     pub basket: Account<'info, BasketState>,
-    
+
     #[account(mut)]
     pub basket_mint: Account<'info, Mint>,
-    
+
     #[account(
         init_if_needed,
         payer = user,
@@ -180,7 +176,7 @@ pub struct Deposit<'info> {
         associated_token::authority = user
     )]
     pub user_basket_token: Account<'info, TokenAccount>,
-    
+
     #[account(mut)]
     pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -192,17 +188,17 @@ pub struct Deposit<'info> {
 pub struct Redeem<'info> {
     #[account(mut)]
     pub basket: Account<'info, BasketState>,
-    
+
     #[account(mut)]
     pub basket_mint: Account<'info, Mint>,
-    
+
     #[account(
         mut,
         constraint = user_basket_token.mint == basket_mint.key(),
         constraint = user_basket_token.owner == user.key()
     )]
     pub user_basket_token: Account<'info, TokenAccount>,
-    
+
     #[account(mut)]
     pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
@@ -213,7 +209,7 @@ pub struct Redeem<'info> {
 pub struct WithdrawAuthoritySol<'info> {
     #[account(mut, has_one = authority @ BasketError::Unauthorized)]
     pub basket: Account<'info, BasketState>,
-    
+
     #[account(mut)]
     pub authority: Signer<'info>,
 }
@@ -222,13 +218,13 @@ pub struct WithdrawAuthoritySol<'info> {
 pub struct EmergencyWithdraw<'info> {
     #[account(mut, has_one = authority @ BasketError::Unauthorized)]
     pub basket: Account<'info, BasketState>,
-    
+
     #[account(mut)]
     pub basket_token: Account<'info, TokenAccount>,
-    
+
     #[account(mut)]
     pub authority_token: Account<'info, TokenAccount>,
-    
+
     #[account(mut)]
     pub authority: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -267,13 +263,8 @@ pub enum BasketError {
     #[msg("Insufficient balance")]
     InsufficientBalance,
 }
-    
 
-pub fn add_token(
-    ctx: Context<AddToken>,
-    token_mint: Pubkey,
-    weight: u8,
-) -> Result<()> {
+pub fn add_token(ctx: Context<AddToken>, token_mint: Pubkey, weight: u8) -> Result<()> {
     let basket = &mut ctx.accounts.basket;
     require!(!basket.paused, BasketError::ProgramPaused);
     require!(
@@ -284,9 +275,11 @@ pub fn add_token(
         basket.tokens.len() < basket.max_tokens as usize,
         BasketError::TooManyTokens
     );
-    
+
     // Validate total weights
-    let total_weight: u8 = basket.tokens.iter()
+    let total_weight: u8 = basket
+        .tokens
+        .iter()
         .map(|t| t.weight)
         .sum::<u8>()
         .checked_add(weight)
@@ -304,14 +297,11 @@ pub fn add_token(
         weight,
         token_account: Pubkey::default(),
     });
-    
+
     Ok(())
 }
 
-pub fn remove_token(
-    ctx: Context<RemoveToken>,
-    token_mint: Pubkey,
-) -> Result<()> {
+pub fn remove_token(ctx: Context<RemoveToken>, token_mint: Pubkey) -> Result<()> {
     let basket = &mut ctx.accounts.basket;
     require!(!basket.paused, BasketError::ProgramPaused);
     require!(
@@ -319,19 +309,18 @@ pub fn remove_token(
         BasketError::Unauthorized
     );
 
-    let token_index = basket.tokens.iter()
+    let token_index = basket
+        .tokens
+        .iter()
         .position(|t| t.mint == token_mint)
         .ok_or(BasketError::TokenNotFound)?;
 
     basket.tokens.remove(token_index);
-    
+
     Ok(())
 }
 
-pub fn set_paused(
-    ctx: Context<SetPaused>,
-    paused: bool,
-) -> Result<()> {
+pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
     let basket = &mut ctx.accounts.basket;
     require!(
         basket.authority == ctx.accounts.authority.key(),
@@ -346,7 +335,7 @@ pub fn deposit(
     amount: u64,
     jupiter_quote: [u8; 32],
     slippage_bps: u16,
-    minimum_token_amounts: Vec<u64>
+    minimum_token_amounts: Vec<u64>,
 ) -> Result<()> {
     let basket = &mut ctx.accounts.basket;
     require!(!basket.paused, BasketError::ProgramPaused);
@@ -371,9 +360,9 @@ pub fn deposit(
     let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
         &ctx.accounts.user.key(),
         &basket.key(),
-        amount
+        amount,
     );
-    
+
     anchor_lang::solana_program::program::invoke(
         &transfer_ix,
         &[
@@ -384,7 +373,8 @@ pub fn deposit(
     )?;
 
     // Update state before external calls
-    basket.total_supply = basket.total_supply
+    basket.total_supply = basket
+        .total_supply
         .checked_add(amount)
         .ok_or(BasketError::MathOverflow)?;
 
@@ -400,7 +390,7 @@ pub fn deposit(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             cpi_accounts,
-            &[seeds]
+            &[seeds],
         ),
         amount,
     )?;
@@ -420,9 +410,9 @@ pub fn deposit(
             token_acc_data.owner == basket.key(),
             BasketError::InvalidTokenOwner
         );
-        
+
         let token_amount = token_acc_data.amount;
-        
+
         // Create Jupiter swap instruction
         let swap_ix = Instruction {
             program_id: jupiter::JUPITER_V6_ID,
@@ -440,10 +430,11 @@ pub fn deposit(
                     in_amount: token_amount,
                     quote_id: jupiter_quote,
                     slippage_bps,
-                }
-            )).unwrap(),
+                },
+            ))
+            .unwrap(),
         };
-        
+
         // Execute swap
         anchor_lang::solana_program::program::invoke(
             &swap_ix,
@@ -455,7 +446,7 @@ pub fn deposit(
         let lamports_spent = current_lamports
             .checked_sub(initial_lamports)
             .ok_or(BasketError::MathOverflow)?;
-        
+
         require!(
             lamports_spent >= minimum_token_amounts[i],
             BasketError::SlippageExceeded
@@ -466,7 +457,7 @@ pub fn deposit(
 
     // Clear reentrancy guard
     basket.reentrancy_guard = false;
-    
+
     Ok(())
 }
 
@@ -475,7 +466,7 @@ pub fn redeem(
     amount: u64,
     jupiter_quote: [u8; 32],
     slippage_bps: u16,
-    minimum_sol_amount: u64
+    minimum_sol_amount: u64,
 ) -> Result<()> {
     let basket = &mut ctx.accounts.basket;
     require!(!basket.paused, BasketError::ProgramPaused);
@@ -497,12 +488,13 @@ pub fn redeem(
         .ok_or(BasketError::MathOverflow)?
         .checked_div(basket.total_supply as u128)
         .ok_or(BasketError::MathOverflow)?;
-    
+
     // Update state before external calls
-    basket.total_supply = basket.total_supply
+    basket.total_supply = basket
+        .total_supply
         .checked_sub(amount)
         .ok_or(BasketError::MathOverflow)?;
-    
+
     // Burn basket tokens
     let seeds = &[b"basket".as_ref(), &[basket.bump]];
     token::burn(
@@ -513,19 +505,21 @@ pub fn redeem(
                 from: ctx.accounts.user_basket_token.to_account_info(),
                 authority: ctx.accounts.user.to_account_info(),
             },
-            &[seeds]
+            &[seeds],
         ),
-        amount
+        amount,
     )?;
 
     // Sell tokens back to SOL
     let initial_basket_lamports = basket.to_account_info().lamports();
     let mut total_sol_received = 0;
-    
+
     for (i, token_info) in basket.tokens.iter().enumerate() {
         // Verify token account mint and owner
-        let token_account = Account::<TokenAccount>::try_from(&ctx.accounts.user_basket_token.to_account_info())?;
-        let token_acc_data = Account::<TokenAccount>::try_from(&ctx.accounts.user_basket_token.to_account_info())?;
+        let token_account =
+            Account::<TokenAccount>::try_from(&ctx.accounts.user_basket_token.to_account_info())?;
+        let token_acc_data =
+            Account::<TokenAccount>::try_from(&ctx.accounts.user_basket_token.to_account_info())?;
         require!(
             token_acc_data.mint == token_info.mint,
             BasketError::InvalidTokenMint
@@ -559,10 +553,11 @@ pub fn redeem(
                     in_amount: redeem_amount,
                     quote_id: jupiter_quote,
                     slippage_bps,
-                }
-            )).unwrap(),
+                },
+            ))
+            .unwrap(),
         };
-        
+
         anchor_lang::solana_program::program::invoke(
             &swap_ix,
             &ctx.remaining_accounts[i * 12..(i + 1) * 12],
@@ -583,18 +578,19 @@ pub fn redeem(
 
     // Transfer SOL to user
     **basket.to_account_info().try_borrow_mut_lamports()? -= total_sol_received;
-    **ctx.accounts.user.to_account_info().try_borrow_mut_lamports()? += total_sol_received;
+    **ctx
+        .accounts
+        .user
+        .to_account_info()
+        .try_borrow_mut_lamports()? += total_sol_received;
 
     // Clear reentrancy guard
     basket.reentrancy_guard = false;
-    
+
     Ok(())
 }
 
-pub fn withdraw_authority_sol(
-    ctx: Context<WithdrawAuthoritySol>,
-    amount: u64,
-) -> Result<()> {
+pub fn withdraw_authority_sol(ctx: Context<WithdrawAuthoritySol>, amount: u64) -> Result<()> {
     let basket = &ctx.accounts.basket;
     require!(
         basket.authority == ctx.accounts.authority.key(),
@@ -602,13 +598,14 @@ pub fn withdraw_authority_sol(
     );
 
     let basket_lamports = basket.to_account_info().lamports();
-    require!(
-        basket_lamports >= amount,
-        BasketError::InsufficientBalance
-    );
+    require!(basket_lamports >= amount, BasketError::InsufficientBalance);
 
     **basket.to_account_info().try_borrow_mut_lamports()? -= amount;
-    **ctx.accounts.authority.to_account_info().try_borrow_mut_lamports()? += amount;
+    **ctx
+        .accounts
+        .authority
+        .to_account_info()
+        .try_borrow_mut_lamports()? += amount;
 
     Ok(())
 }
@@ -619,14 +616,18 @@ pub fn emergency_withdraw(
     amount: u64,
 ) -> Result<()> {
     let basket = &ctx.accounts.basket;
-    
+
     require!(
         basket.tokens.iter().any(|t| t.mint == token_mint),
         BasketError::TokenNotFound
     );
 
-    let token_account = Account::<TokenAccount>::try_from(&ctx.accounts.basket_token.to_account_info())?;
-    require!(token_account.amount >= amount, BasketError::InsufficientBalance);
+    let token_account =
+        Account::<TokenAccount>::try_from(&ctx.accounts.basket_token.to_account_info())?;
+    require!(
+        token_account.amount >= amount,
+        BasketError::InsufficientBalance
+    );
 
     // Transfer tokens to authority
     let seeds = &[b"basket".as_ref(), &[basket.bump]];
@@ -640,7 +641,7 @@ pub fn emergency_withdraw(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             cpi_accounts,
-            &[seeds]
+            &[seeds],
         ),
         amount,
     )?;

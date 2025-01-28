@@ -3,17 +3,20 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-basket_token = "HEtbYTnFvGD6FePjzrGCyjZwtDR6ycRd26qPcPbNQoCN"
+basket_token = "E5T9eLjbfeWRCegwocsrWfn1CkH4a5MnySjheUuwfNMt"
+
+[programs.devnet]
+basket_token = "E5T9eLjbfeWRCegwocsrWfn1CkH4a5MnySjheUuwfNMt"
+
+[programs.mainnet]
+basket_token = "E5T9eLjbfeWRCegwocsrWfn1CkH4a5MnySjheUuwfNMt"
 
 [registry]
-url = "https://api.devnet.solana.com"
+url = "https://api.apr.dev"
 
 [provider]
 cluster = "Localnet"
-wallet = "~/.config/solana/id.json"
+wallet = "/Users/thomas/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
-
-[toolchain]
-anchor_version = "0.28.0"
