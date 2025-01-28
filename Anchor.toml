@@ -3,10 +3,10 @@ seeds = false
 skip-lint = false
 
 [programs.localnet]
-basket_token = "REPLACE_WITH_YOUR_PROGRAM_ID"
+basket_token = "HEtbYTnFvGD6FePjzrGCyjZwtDR6ycRd26qPcPbNQoCN"
 
 [registry]
-url = "https://api.apr.dev"
+url = "https://api.devnet.solana.com"
 
 [provider]
 cluster = "Localnet"
